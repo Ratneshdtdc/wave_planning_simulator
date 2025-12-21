@@ -7,7 +7,7 @@ from streamlit_folium import st_folium
 # PAGE CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌙 Night Network SLA Visualizer")
+st.title("DTDC's Network Connections Explorer")
 
 # =========================
 # LOAD DATA
@@ -21,56 +21,87 @@ def load_data():
 result, nodes = load_data()
 
 # =========================
-# SIDEBAR CONTROLS
+# SIDEBAR – CONNECTION PATH
+# =========================
+st.sidebar.header("🔗 Connection Path")
+
+paths = sorted(result["connection_full"].dropna().unique())
+selected_path = st.sidebar.selectbox(
+    "Select connection path",
+    paths
+)
+
+# Filter by selected path
+path_df = result[result["connection_full"] == selected_path].copy()
+
+# =========================
+# TIME SLIDER (MINUTES)
 # =========================
 st.sidebar.header("⏱ Time Filter")
 
-start_hour = st.sidebar.slider("Start hour", 0, 23, 18)
-end_hour = st.sidebar.slider("End hour", 0, 23, 6)
+min_t = path_df["Connection Departure Time"].min()
+max_t = path_df["Connection Departure Time"].max()
 
-st.sidebar.header("🎨 SLA Filter")
+start_time, end_time = st.sidebar.select_slider(
+    "Departure Time Window",
+    options=sorted(path_df["Connection Departure Time"].unique()),
+    value=(min_t, max_t)
+)
+
+path_df = path_df[
+    (path_df["Connection Departure Time"] >= start_time) &
+    (path_df["Connection Departure Time"] <= end_time)
+]
+
+# =========================
+# SLA + MODE FILTER
+# =========================
+st.sidebar.header("🎨 Filters")
+
 sla_filter = st.sidebar.multiselect(
-    "Show SLA Colors",
+    "SLA",
     ["RED", "ORANGE", "GREEN"],
     default=["RED", "ORANGE", "GREEN"]
 )
 
 mode_filter = st.sidebar.multiselect(
     "Mode",
-    result["Mode"].unique().tolist(),
-    default=result["Mode"].unique().tolist()
+    path_df["Mode"].unique().tolist(),
+    default=path_df["Mode"].unique().tolist()
 )
 
-# =========================
-# TIME WINDOW LOGIC
-# =========================
-def in_time_window(dep_time, start_h, end_h):
-    hour = int(dep_time.split(":")[0])
-    if start_h <= end_h:
-        return start_h <= hour <= end_h
-    else:
-        # overnight window
-        return hour >= start_h or hour <= end_h
-
-filtered = result[
-    result["Connection Departure Time"].apply(
-        lambda x: in_time_window(x, start_hour, end_hour)
-    )
+path_df = path_df[
+    path_df["SLA_COLOR"].isin(sla_filter) &
+    path_df["Mode"].isin(mode_filter)
 ]
 
-filtered = filtered[
-    filtered["SLA_COLOR"].isin(sla_filter) &
-    filtered["Mode"].isin(mode_filter)
-]
+# =========================
+# METRICS (OPS GRADE)
+# =========================
+total = len(path_df)
+red = (path_df["SLA_COLOR"] == "RED").sum()
+orange = (path_df["SLA_COLOR"] == "ORANGE").sum()
+green = (path_df["SLA_COLOR"] == "GREEN").sum()
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Total Connections", total)
+col2.metric("🟢 Green %", f"{(green/total*100):.1f}%" if total else "0%")
+col3.metric("🟠 Orange %", f"{(orange/total*100):.1f}%" if total else "0%")
+col4.metric("🔴 Red %", f"{(red/total*100):.1f}%" if total else "0%")
+
+# Risk score (simple & interpretable)
+risk_score = (red*3 + orange*2 + green*1) / max(total, 1)
+st.caption(f"⚠️ Risk Score (lower is better): **{risk_score:.2f}**")
 
 # =========================
 # JOIN COORDINATES
 # =========================
-filtered = filtered.merge(
+path_df = path_df.merge(
     nodes, left_on="LEG_ORIGIN_CODE", right_on="CODE"
 ).rename(columns={"lat": "o_lat", "lon": "o_lon"}).drop(columns="CODE")
 
-filtered = filtered.merge(
+path_df = path_df.merge(
     nodes, left_on="LEG_DEST_CODE", right_on="CODE"
 ).rename(columns={"lat": "d_lat", "lon": "d_lon"}).drop(columns="CODE")
 
@@ -85,12 +116,12 @@ color_map = {
     "RED": "red"
 }
 
-for _, row in filtered.iterrows():
+for _, row in path_df.iterrows():
     folium.PolyLine(
         [(row.o_lat, row.o_lon), (row.d_lat, row.d_lon)],
         color=color_map[row.SLA_COLOR],
-        weight=3,
-        opacity=0.8,
+        weight=4,
+        opacity=0.85,
         tooltip=f"""
         {row.LEG_ORIGIN_CODE} → {row.LEG_DEST_CODE}<br>
         Departure: {row['Connection Departure Time']}<br>
@@ -99,4 +130,4 @@ for _, row in filtered.iterrows():
         """
     ).add_to(m)
 
-st_folium(m, width=1200, height=650)
+st_folium(m, width=1300, height=650)
