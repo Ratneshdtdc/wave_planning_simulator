@@ -41,12 +41,33 @@ st.sidebar.header("⏱ Time Filter")
 min_t = path_df["Connection Departure Time"].min()
 max_t = path_df["Connection Departure Time"].max()
 
-start_time, end_time = st.sidebar.select_slider(
-    "Departure Time Window",
-    options=sorted(path_df["Connection Departure Time"].unique()),
-    value=(min_t, max_t)
-)
+# start_time, end_time = st.sidebar.select_slider(
+#     "Departure Time Window",
+#     options=sorted(path_df["Connection Departure Time"].unique()),
+#     value=(min_t, max_t)
+# )
 
+# =========================
+# TIME SLIDER (SAFE)
+# =========================
+st.sidebar.header("⏱ Time Filter")
+
+unique_times = sorted(path_df["Connection Departure Time"].dropna().unique())
+
+if len(unique_times) < 2:
+    st.sidebar.info(
+        f"Only one departure time available: {unique_times[0]}"
+    )
+    start_time = unique_times[0]
+    end_time = unique_times[0]
+else:
+    start_time, end_time = st.sidebar.select_slider(
+        "Departure Time Window",
+        options=unique_times,
+        value=(unique_times[0], unique_times[-1])
+    )
+
+# Apply filter
 path_df = path_df[
     (path_df["Connection Departure Time"] >= start_time) &
     (path_df["Connection Departure Time"] <= end_time)
