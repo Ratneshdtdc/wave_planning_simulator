@@ -19,7 +19,7 @@ def load_data():
     return result, nodes
 
 result, nodes = load_data()
-st.write(result.columns)
+#st.write(result.columns)
 # =========================
 # SIDEBAR – CONNECTION PATH
 # =========================
