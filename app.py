@@ -19,12 +19,11 @@ def load_data():
     return result, nodes
 
 result, nodes = load_data()
-
+st.write(result.columns)
 # =========================
 # SIDEBAR – CONNECTION PATH
 # =========================
 st.sidebar.header("🔗 Connection Path")
-
 paths = sorted(result["connection_full"].dropna().unique())
 selected_path = st.sidebar.selectbox(
     "Select connection path",
