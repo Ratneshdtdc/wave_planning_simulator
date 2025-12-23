@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import folium
+import numpy as np
 from streamlit_folium import st_folium
 
 # =========================
@@ -19,47 +20,30 @@ def load_data():
     return result, nodes
 
 result, nodes = load_data()
-#st.write(result.columns)
+
 # =========================
 # SIDEBAR – CONNECTION PATH
 # =========================
 st.sidebar.header("🔗 Connection Path")
 paths = sorted(result["connection_full"].dropna().unique())
+
 selected_path = st.sidebar.selectbox(
     "Select connection path",
     paths
 )
 
-# Filter by selected path
 path_df = result[result["connection_full"] == selected_path].copy()
 
 # =========================
-# TIME SLIDER (MINUTES)
-# =========================
-st.sidebar.header("⏱ Time Filter")
-
-min_t = path_df["Connection Departure Time"].min()
-max_t = path_df["Connection Departure Time"].max()
-
-# start_time, end_time = st.sidebar.select_slider(
-#     "Departure Time Window",
-#     options=sorted(path_df["Connection Departure Time"].unique()),
-#     value=(min_t, max_t)
-# )
-
-# =========================
-# TIME SLIDER (SAFE)
+# TIME FILTER
 # =========================
 st.sidebar.header("⏱ Time Filter")
 
 unique_times = sorted(path_df["Connection Departure Time"].dropna().unique())
 
 if len(unique_times) < 2:
-    st.sidebar.info(
-        f"Only one departure time available: {unique_times[0]}"
-    )
-    start_time = unique_times[0]
-    end_time = unique_times[0]
+    st.sidebar.info(f"Only one departure time: {unique_times[0]}")
+    start_time = end_time = unique_times[0]
 else:
     start_time, end_time = st.sidebar.select_slider(
         "Departure Time Window",
@@ -67,7 +51,6 @@ else:
         value=(unique_times[0], unique_times[-1])
     )
 
-# Apply filter
 path_df = path_df[
     (path_df["Connection Departure Time"] >= start_time) &
     (path_df["Connection Departure Time"] <= end_time)
@@ -96,7 +79,7 @@ path_df = path_df[
 ]
 
 # =========================
-# METRICS (OPS GRADE)
+# METRICS
 # =========================
 total = len(path_df)
 red = (path_df["SLA_COLOR"] == "RED").sum()
@@ -104,14 +87,12 @@ orange = (path_df["SLA_COLOR"] == "ORANGE").sum()
 green = (path_df["SLA_COLOR"] == "GREEN").sum()
 
 col1, col2, col3, col4 = st.columns(4)
-
 col1.metric("Total Connections", total)
 col2.metric("🟢 Green %", f"{(green/total*100):.1f}%" if total else "0%")
 col3.metric("🟠 Orange %", f"{(orange/total*100):.1f}%" if total else "0%")
 col4.metric("🔴 Red %", f"{(red/total*100):.1f}%" if total else "0%")
 
-# Risk score (simple & interpretable)
-risk_score = (red*3 + orange*2 + green*1) / max(total, 1)
+risk_score = (red * 3 + orange * 2 + green) / max(total, 1)
 st.caption(f"⚠️ Risk Score (lower is better): **{risk_score:.2f}**")
 
 # =========================
@@ -126,6 +107,36 @@ path_df = path_df.merge(
 ).rename(columns={"lat": "d_lat", "lon": "d_lon"}).drop(columns="CODE")
 
 # =========================
+# HANDLE PARALLEL EDGES
+# =========================
+path_df["dup_index"] = (
+    path_df
+    .groupby(["LEG_ORIGIN_CODE", "LEG_DEST_CODE"])
+    .cumcount()
+)
+
+# =========================
+# CURVED LINE FUNCTION
+# =========================
+def curved_line(lat1, lon1, lat2, lon2, offset=0.15, n_points=30):
+    lats = np.linspace(lat1, lat2, n_points)
+    lons = np.linspace(lon1, lon2, n_points)
+
+    dx = lon2 - lon1
+    dy = lat2 - lat1
+    length = np.sqrt(dx**2 + dy**2) + 1e-6
+
+    # perpendicular vector
+    px = -dy / length
+    py = dx / length
+
+    curve = np.sin(np.linspace(0, np.pi, n_points))
+    lats = lats + py * offset * curve
+    lons = lons + px * offset * curve
+
+    return list(zip(lats, lons))
+
+# =========================
 # MAP
 # =========================
 m = folium.Map(location=[22, 78], zoom_start=5)
@@ -137,8 +148,17 @@ color_map = {
 }
 
 for _, row in path_df.iterrows():
+
+    offset = 0.12 * (row.dup_index + 1)
+
+    coords = curved_line(
+        row.o_lat, row.o_lon,
+        row.d_lat, row.d_lon,
+        offset=offset
+    )
+
     folium.PolyLine(
-        [(row.o_lat, row.o_lon), (row.d_lat, row.d_lon)],
+        coords,
         color=color_map[row.SLA_COLOR],
         weight=4,
         opacity=0.85,
@@ -150,4 +170,7 @@ for _, row in path_df.iterrows():
         """
     ).add_to(m)
 
+# =========================
+# RENDER
+# =========================
 st_folium(m, width=1300, height=650)
