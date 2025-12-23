@@ -5,15 +5,15 @@ import numpy as np
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
-# =========================
+# ============================================================
 # PAGE CONFIG
-# =========================
+# ============================================================
 st.set_page_config(layout="wide")
 st.title("DTDC Network Connections Explorer")
 
-# =========================
+# ============================================================
 # LOAD DATA
-# =========================
+# ============================================================
 @st.cache_data
 def load_data():
     result = pd.read_csv("result.csv")
@@ -22,9 +22,9 @@ def load_data():
 
 result, nodes = load_data()
 
-# =========================
+# ============================================================
 # SIDEBAR – CONNECTION PATH
-# =========================
+# ============================================================
 st.sidebar.header("🔗 Connection Path")
 
 paths = sorted(result["connection_full"].dropna().unique())
@@ -32,9 +32,9 @@ selected_path = st.sidebar.selectbox("Select connection path", paths)
 
 path_df = result[result["connection_full"] == selected_path].copy()
 
-# =========================
-# ORIGIN FILTER (NEW)
-# =========================
+# ============================================================
+# ORIGIN FILTER
+# ============================================================
 st.sidebar.header("🏭 Origin Filter")
 
 origins = sorted(path_df["LEG_ORIGIN_CODE"].unique())
@@ -46,9 +46,9 @@ selected_origins = st.sidebar.multiselect(
 
 path_df = path_df[path_df["LEG_ORIGIN_CODE"].isin(selected_origins)]
 
-# =========================
+# ============================================================
 # TIME FILTER
-# =========================
+# ============================================================
 st.sidebar.header("⏱ Time Filter")
 
 unique_times = sorted(path_df["Connection Departure Time"].dropna().unique())
@@ -67,9 +67,9 @@ path_df = path_df[
     (path_df["Connection Departure Time"] <= end_time)
 ]
 
-# =========================
+# ============================================================
 # SLA + MODE FILTER
-# =========================
+# ============================================================
 st.sidebar.header("🎨 Filters")
 
 sla_filter = st.sidebar.multiselect(
@@ -89,9 +89,9 @@ path_df = path_df[
     path_df["Mode"].isin(mode_filter)
 ]
 
-# =========================
+# ============================================================
 # METRICS
-# =========================
+# ============================================================
 total = len(path_df)
 red = (path_df["SLA_COLOR"] == "RED").sum()
 orange = (path_df["SLA_COLOR"] == "ORANGE").sum()
@@ -103,9 +103,9 @@ c2.metric("🟢 Green %", f"{green/total*100:.1f}%" if total else "0%")
 c3.metric("🟠 Orange %", f"{orange/total*100:.1f}%" if total else "0%")
 c4.metric("🔴 Red %", f"{red/total*100:.1f}%" if total else "0%")
 
-# =========================
+# ============================================================
 # JOIN COORDINATES
-# =========================
+# ============================================================
 path_df = path_df.merge(
     nodes, left_on="LEG_ORIGIN_CODE", right_on="CODE"
 ).rename(columns={"lat": "o_lat", "lon": "o_lon"}).drop(columns="CODE")
@@ -114,24 +114,34 @@ path_df = path_df.merge(
     nodes, left_on="LEG_DEST_CODE", right_on="CODE"
 ).rename(columns={"lat": "d_lat", "lon": "d_lon"}).drop(columns="CODE")
 
-# =========================
-# DUPLICATE EDGE INDEX
-# =========================
+# ============================================================
+# PARALLEL EDGE INDEX
+# ============================================================
 path_df["dup_index"] = (
     path_df.groupby(["LEG_ORIGIN_CODE", "LEG_DEST_CODE"]).cumcount()
 )
 
-# =========================
-# CURVE FUNCTION
-# =========================
-def curved_line(lat1, lon1, lat2, lon2, offset=0.12, n=30):
+# ============================================================
+# CITY-SAFE CURVED LINE FUNCTION
+# ============================================================
+def curved_line(lat1, lon1, lat2, lon2, dup_index, n=30):
     lats = np.linspace(lat1, lat2, n)
     lons = np.linspace(lon1, lon2, n)
 
     dx, dy = lon2 - lon1, lat2 - lat1
-    length = np.sqrt(dx**2 + dy**2) + 1e-6
+    length = np.sqrt(dx**2 + dy**2) + 1e-9
 
+    # perpendicular unit vector
     px, py = -dy / length, dx / length
+
+    # symmetric fan-out: -1, +1, -2, +2 ...
+    k = (dup_index // 2 + 1) * (-1 if dup_index % 2 == 0 else 1)
+
+    # distance-aware curvature (🔥 key fix)
+    base_frac = 0.06     # gentle curve
+    max_frac = 0.20      # never exceed 20% of link length
+    offset = min(base_frac * length, max_frac * length) * k
+
     curve = np.sin(np.linspace(0, np.pi, n))
 
     lats += py * offset * curve
@@ -139,17 +149,17 @@ def curved_line(lat1, lon1, lat2, lon2, offset=0.12, n=30):
 
     return list(zip(lats, lons))
 
-# =========================
-# MAP INIT (AUTO ZOOM)
-# =========================
+# ============================================================
+# MAP INIT (AUTO-ZOOM TO CITY)
+# ============================================================
 center_lat = np.mean(pd.concat([path_df.o_lat, path_df.d_lat]))
 center_lon = np.mean(pd.concat([path_df.o_lon, path_df.d_lon]))
 
-m = folium.Map(location=[center_lat, center_lon], zoom_start=6)
+m = folium.Map(location=[center_lat, center_lon], zoom_start=11)
 
-# =========================
-# LAYERS BY SLA
-# =========================
+# ============================================================
+# SLA LAYERS
+# ============================================================
 sla_layers = {
     "GREEN": folium.FeatureGroup(name="🟢 Green"),
     "ORANGE": folium.FeatureGroup(name="🟠 Orange"),
@@ -158,14 +168,14 @@ sla_layers = {
 
 color_map = {"GREEN": "green", "ORANGE": "orange", "RED": "red"}
 
-# =========================
+# ============================================================
 # DRAW CONNECTIONS
-# =========================
+# ============================================================
 for _, row in path_df.iterrows():
     coords = curved_line(
         row.o_lat, row.o_lon,
         row.d_lat, row.d_lon,
-        offset=0.1 * (row.dup_index + 1)
+        row.dup_index
     )
 
     folium.PolyLine(
@@ -182,9 +192,9 @@ for _, row in path_df.iterrows():
         """
     ).add_to(sla_layers[row.SLA_COLOR])
 
-# =========================
+# ============================================================
 # NODE CLUSTERING (DECLUTTER)
-# =========================
+# ============================================================
 node_cluster = MarkerCluster(name="Nodes")
 
 used_nodes = pd.concat([
@@ -197,24 +207,23 @@ used_nodes = pd.concat([
 for _, n in used_nodes.iterrows():
     folium.CircleMarker(
         location=[n.lat, n.lon],
-        radius=5,
+        radius=4,
         color="black",
         fill=True,
         fill_opacity=0.9,
         popup=f"<b>{n.code}</b>"
     ).add_to(node_cluster)
 
-# =========================
-# ADD EVERYTHING
-# =========================
+# ============================================================
+# ADD TO MAP
+# ============================================================
 for layer in sla_layers.values():
     layer.add_to(m)
 
 node_cluster.add_to(m)
-
 folium.LayerControl(collapsed=False).add_to(m)
 
-# =========================
+# ============================================================
 # RENDER
-# =========================
+# ============================================================
 st_folium(m, width=1300, height=650)
